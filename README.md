@@ -53,7 +53,7 @@ CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1 claude --plugin-dir .
 
 這個環境變數只加在這次啟動，不寫入全域設定。Claude Code 記錄 `kittyGraphics=yes (env: CLAUDE_CODE_FORCE_TERMINAL_IMAGES)`；橫向藍圖、直向橘圖可同時顯示，刪掉其中一個標記只移除對應縮圖，清空輸入後預覽列消失。現有白話／跟丟了入口仍在。
 
-驗證限於本機 Herdr 與 Claude Code 2.1.288；沒有承諾其他終端或新版相容。直接 Ghostty 對照未完成，真送出後清空只保留 mock 證據，實機沒有提交圖片給模型。尚未全域安裝或啟用。
+驗證限於本機 Herdr 與 Claude Code 2.1.288；沒有承諾其他終端或新版相容。直接 Ghostty 對照未完成，真送出後清空只保留 mock 證據，實機沒有提交圖片給模型。常駐使用方式見前面的安裝段；這裡保留單一 session 的顯圖驗收範圍。
 
 mod 原始碼不開網路、不寫檔、不呼叫模型。`CLAUDE_CODE_TMPDIR` 沒設定時，會跑一次 `id -u`，用來組預設暫存目錄。
 
