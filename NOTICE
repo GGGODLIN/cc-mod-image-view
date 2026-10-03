@@ -1,0 +1,9 @@
+This directory adapts the pasted-image thumbnail mechanism from
+jarrodwatts/claude-image-view at commit
+12795b62f1c17f4b36c980e33672fbdff3a6731a.
+
+https://github.com/jarrodwatts/claude-image-view/tree/12795b62f1c17f4b36c980e33672fbdff3a6731a
+
+Original work Copyright (c) 2026 Jarrod Watts, licensed under the MIT License.
+See LICENSE. The plugin id in this checkout is cc-image-view so it does not
+share the upstream plugin name image-view.
