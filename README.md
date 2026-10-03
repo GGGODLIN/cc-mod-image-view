@@ -10,6 +10,27 @@ session 一開始就每 200ms 讀一次輸入框。沒有貼圖時這個 timer �
 
 機制借自 [jarrodwatts/claude-image-view](https://github.com/jarrodwatts/claude-image-view/tree/12795b62f1c17f4b36c980e33672fbdff3a6731a) 的 commit `12795b62f1c17f4b36c980e33672fbdff3a6731a`。MIT，Copyright (c) 2026 Jarrod Watts。見 [LICENSE](/LICENSE) 與 [NOTICE](/NOTICE)。這裡的 plugin 名稱是 `cc-image-view`，避免和上游的 `image-view` 撞名。
 
+## 常駐安裝
+
+在 repo 根目錄執行一次：
+
+```bash
+claude plugin marketplace add .
+claude plugin install cc-image-view@cc-mod-image-view --scope user
+```
+
+之後新開 Claude Code session 會自動載入，不必再帶 `--plugin-dir`。有圖片標記才顯示預覽列。
+
+在 Herdr 使用時，另把以下條件放進互動 shell 的啟動設定，讓圖片開關只套用在新的 Herdr shell：
+
+```bash
+if [[ "${HERDR_ENV:-}" == "1" ]]; then
+  export CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1
+fi
+```
+
+已開著的 session 不會自動取得新環境變數，要新開 session。安裝的是副本；改原碼後用 `claude plugin update cc-image-view@cc-mod-image-view` 更新。
+
 ## 試用
 
 不正式安裝、不新增全域啟用項。在這個 repo 的根目錄另開 session：

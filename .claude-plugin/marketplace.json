@@ -1,0 +1,13 @@
+{
+  "name": "cc-mod-image-view",
+  "owner": { "name": "gggodlin" },
+  "metadata": { "description": "獨立貼圖預覽 mod，有圖片標記才顯示縮圖" },
+  "plugins": [
+    {
+      "name": "cc-image-view",
+      "source": "./",
+      "description": "貼圖後在輸入框上方顯示原生縮圖與編號",
+      "license": "MIT"
+    }
+  ]
+}
