@@ -7,7 +7,7 @@ A Claude Code mod that lets you see the images you paste, in two places:
 - **Above the prompt**: while the draft holds `[Image #n]` tags, a row of numbered thumbnails shows above it. With no tags, nothing is drawn.
 - **Under sent prompts**: a prompt you sent with images gets a row of `[ img #n ]` buttons. Hover one and its thumbnail appears right under it; `⤢ Zoom` under the thumbnail, or the button itself, opens the picture in a side pane (Esc closes it). The picture itself can't be clicked: Claude Code's image element takes no presses.
 
-https://github.com/user-attachments/assets/8487b2ae-0a09-44c7-8fd7-9ef634856773
+https://github.com/user-attachments/assets/d673f3cf-24d4-43b7-85b0-539b95333d52
 
 The demo is an HTML reconstruction, not a screen recording: the side pane is drawn wider than in a real terminal (about 44% of the window against about 29%), the reveal and slide timings were designed, and terminal glyphs such as `⎿` are redrawn.
 
