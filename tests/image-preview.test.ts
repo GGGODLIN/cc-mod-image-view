@@ -40,12 +40,19 @@ test('thumbnails follow image tags on the terminal and leave every other surface
   on('env.get', () => ({ value: '/tmp/claude-501' }))
   on('session.id', () => ({ value: 'sess-1' }))
   const entry = { size: 0, mtimeMs: 0, isLink: false }
-  on('fs.list', () => ({
-    value: [
-      { name: '-other', kind: 'dir', ...entry },
-      { name: 'notes.txt', kind: 'file', ...entry },
-      { name: '-work', kind: 'dir', ...entry },
-    ],
+  on('fs.list', ($, e) => ({
+    value:
+      e.path === DIR
+        ? [
+            { name: '1.png', kind: 'file', ...entry },
+            { name: '2.png', kind: 'file', ...entry },
+            { name: '12.png', kind: 'file', ...entry },
+          ]
+        : [
+            { name: '-other', kind: 'dir', ...entry },
+            { name: 'notes.txt', kind: 'file', ...entry },
+            { name: '-work', kind: 'dir', ...entry },
+          ],
   }))
   on('fs.exists', ($, e) => ({
     value: e.path === DIR || e.path === `${DIR}/1.png` || e.path === `${DIR}/2.png`,

@@ -1,7 +1,7 @@
 {
   "name": "cc-image-view",
   "description": "See the images you paste into Claude Code: thumbnails above the prompt instead of bare [Image #1] tags",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "author": {
     "name": "gggodlin",
     "url": "https://github.com/GGGODLIN"

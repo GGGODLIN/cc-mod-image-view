@@ -44,6 +44,16 @@ export function fitCells(size: Size | null, tileRows = TILE_ROWS): Cells {
   return { columns: Math.max(MIN_COLUMNS, columns), rows: Math.min(rows, tileRows) }
 }
 
+/** The largest box inside `maxColumns` × `maxRows` that keeps the picture's aspect ratio; Image caps both at 255. */
+export function fitBox(size: Size | null, maxColumns: number, maxRows: number): Cells {
+  const { width, height } = size ?? FALLBACK
+  const columnsCap = Math.max(1, Math.min(255, maxColumns))
+  const rowsCap = Math.max(1, Math.min(255, maxRows))
+  const columns = Math.round((rowsCap * CELL_ASPECT * width) / height)
+  if (columns <= columnsCap) return { columns: Math.max(1, columns), rows: rowsCap }
+  return { columns: columnsCap, rows: Math.max(1, Math.round((columnsCap * height) / (CELL_ASPECT * width))) }
+}
+
 /**
  * Picture boxes for one row of tiles that fits the band whole, so it never scrolls:
  * the tallest tiles whose chrome fits in `maxRows` and whose total width fits in `bodyColumns`.
@@ -56,4 +66,25 @@ export function fitRow(sizes: readonly (Size | null)[], maxRows: number, bodyCol
     if (width <= bodyColumns) return cells
   }
   return sizes.map(size => fitCells(size, 1))
+}
+
+// East Asian wide and fullwidth ranges a label may use; everything else here is one cell.
+const WIDE = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/
+
+/** Terminal cells a string takes. */
+export function cellWidth(text: string): number {
+  let width = 0
+  for (const char of text) width += WIDE.test(char) ? 2 : 1
+  return width
+}
+
+/** Where each button of a row starts: the terminal draws `[ label ]`, one cell apart. */
+export function buttonOffsets(labels: readonly string[]): number[] {
+  const offsets: number[] = []
+  let at = 0
+  for (const label of labels) {
+    offsets.push(at)
+    at += cellWidth(label) + 4 + GAP
+  }
+  return offsets
 }
