@@ -63,20 +63,26 @@ const CONVERTERS = (src: string, out: string): string[][] => [
   ['convert', '-limit', 'memory', '256MiB', '-limit', 'disk', '1GiB', `${src}[0]`, out],
 ]
 
-// The copies here are someone's pictures: the folder must be this user's own, mode 700, and no
-// symlink, even when CLAUDE_CODE_TMPDIR points somewhere shared.
-const PRIVATE_DIRS = 'umask 077; for d in "$1" "$2"; do mkdir -p "$d" && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" || exit 1; done'
-let privateDir: string | undefined
+// The copies here are someone's pictures. A folder is only as private as the one holding it: if
+// another account can rename entries in the temp root, it can swap our folder for its own. So the
+// root must be ours, not a symlink, writable by no one else, and sit in a parent that is either
+// closed to others or sticky; then both folders are made ours and 700. Run on every write, which
+// also recreates a folder someone cleared.
+const PRIVATE_DIRS = [
+  'umask 077',
+  'r="$1"; p=$(dirname "$r")',
+  '[ -d "$r" ] && [ ! -L "$r" ] && [ -O "$r" ] || exit 1',
+  '[ -z "$(find "$r" -maxdepth 0 \\( -perm -0020 -o -perm -0002 \\))" ] || exit 1',
+  '[ -z "$(find "$p" -maxdepth 0 \\( -perm -0020 -o -perm -0002 \\) ! -perm -1000)" ] || exit 1',
+  'for d in "$2" "$3"; do mkdir -p "$d" && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" || exit 1; done',
+].join('; ')
 
 async function scratch($: EngineInterface, name: string): Promise<string | null> {
-  const base = `${await root($)}/cc-image-view`
+  const top = await root($)
+  const base = `${top}/cc-image-view`
   const dir = `${base}/${await $.session.id()}`
-  if (privateDir !== dir) {
-    const run = await $.process.run(['sh', '-c', PRIVATE_DIRS, 'sh', base, dir], { timeoutMs: 5_000 }).catch(() => null)
-    if (run?.exitCode !== 0) return null
-    privateDir = dir
-  }
-  return `${dir}/${name}`
+  const run = await $.process.run(['sh', '-c', PRIVATE_DIRS, 'sh', top, base, dir], { timeoutMs: 5_000 }).catch(() => null)
+  return run?.exitCode === 0 ? `${dir}/${name}` : null
 }
 
 // One job per output, so two renders asking for the same picture never write it at once
@@ -159,12 +165,20 @@ async function transcriptPath($: EngineInterface): Promise<string | undefined> {
 
 // A transcript can run to hundreds of MB, past $.fs.read's 4 MiB, so grep scans it on disk and
 // passes on only the person's rows that mention an image tag, with every base64 blob removed.
-const TAGGED_ROWS = `grep -F '[Image #' "$1" | grep -F '"type":"user"' | sed -E 's/"data":"[^"]*"/"data":""/g'`
+// A pipeline reports only its last command, so a failed read is turned into a line of its own;
+// grep's 1 means no match, which is fine. (awk would report the read itself but takes ~80x longer.)
+const READ_FAILED = '__CC_IMAGE_VIEW_READ_FAILED__'
+const TAGGED_ROWS =
+  `[ -r "$1" ] || exit 2; ` +
+  `{ grep -F '[Image #' "$1"; s=$?; [ "$s" -le 1 ] || echo '${READ_FAILED}'; } | ` +
+  `grep -F -e '"type":"user"' -e '${READ_FAILED}' | ` +
+  `sed -E 's/"data":"[^"]*"/"data":""/g'`
 
 /** Those rows, or null when the read failed or came back cut short: a partial index is not one. */
 async function taggedRows($: EngineInterface, path: string): Promise<string | null> {
   const run = await $.process.run(['sh', '-c', TAGGED_ROWS, 'sh', path], { timeoutMs: 10_000 }).catch(() => null)
-  return run === null || run.isStdoutTruncated || run.exitCode !== 0 ? null : run.stdout
+  if (run === null || run.isStdoutTruncated || run.exitCode !== 0) return null
+  return run.stdout.split('\n').includes(READ_FAILED) ? null : run.stdout
 }
 
 /** The one full transcript line of a prompt, base64 included; empty when it is over the 4 MiB output cap. */
@@ -220,11 +234,12 @@ async function reload($: EngineInterface, path: string) {
   // Unchanged since the last read: a row still missing is a typed tag, not a late write
   if (sent?.path === path && sent.size === size) return
   const rows = await taggedRows($, path)
-  if (rows !== null) sent = { path, size, messages: sentMessages(rows) }
+  // A failed read voids the old index too: the transcript grew, and the old copy can't say
+  // whether a later prompt made some words ambiguous
+  sent = rows === null ? undefined : { path, size, messages: sentMessages(rows) }
 }
 
 async function sentPrompt($: EngineInterface, text: string): Promise<SentMessage | undefined> {
-  if (pending.has(text.trim())) return undefined
   const path = await transcriptPath($)
   if (path === undefined) return undefined
   // Re-read whenever the transcript grew, even for a prompt already found: a typed copy sent
@@ -233,27 +248,45 @@ async function sentPrompt($: EngineInterface, text: string): Promise<SentMessage
     loading = undefined
   })
   await loading
+  if (!settled(text)) return undefined
   return sent === undefined ? undefined : messageFor(sent.messages, text)
 }
 
 // A prompt's row is drawn before its transcript line is written and is not drawn again on its own.
 // Until that line lands the row could only borrow an earlier prompt with the same words, so every
-// sent prompt with a tag waits as pending, the transcript is read until its line shows up, and then
-// rows redraw.
+// sent prompt with a tag waits as pending until the transcript holds as many prompts with those
+// words as were known before plus every send since. Running out of quick retries ends the fast
+// follow-up, never the wait: an unconfirmed prompt stays without buttons, and any later render
+// that finds the lines lands it.
 const FOLLOW_MS = 300
 const FOLLOW_TRIES = 20
-const pending = new Map<string, number>()
-const countOf = (text: string) => sent?.messages.filter(message => message.text.trim() === text.trim()).length ?? 0
+const pending = new Map<string, { before: number | undefined; sends: number }>()
+const countOf = (text: string) => sent?.messages.filter(message => message.text.trim() === text.trim()).length
 
-// Marked at once, measured in the background: a send never waits on a grep of a large transcript.
-// If the line lands before the baseline is read, the wait ends when the tries run out instead.
+function settled(text: string): boolean {
+  const key = text.trim()
+  const wait = pending.get(key)
+  if (wait === undefined) return true
+  const now = countOf(text)
+  if (wait.before === undefined || now === undefined || now < wait.before + wait.sends) return false
+  pending.delete(key)
+  return true
+}
+
+// Marked at once: a send never waits on a grep of a large transcript. The baseline comes from the
+// index already in hand, which can't hold this send's line yet; with no index, from the first read.
 function watchSend($: EngineInterface, text: string) {
   const key = text.trim()
-  pending.set(key, -1)
+  const wait = pending.get(key)
+  if (wait !== undefined) wait.sends += 1
+  else pending.set(key, { before: countOf(text), sends: 1 })
   void (async () => {
-    const path = await transcriptPath($)
-    if (path !== undefined) await reload($, path)
-    if (pending.get(key) === -1) pending.set(key, countOf(text))
+    const entry = pending.get(key)
+    if (entry !== undefined && entry.before === undefined) {
+      const path = await transcriptPath($)
+      if (path !== undefined) await reload($, path)
+      entry.before = countOf(text) ?? 0
+    }
     follow($, text, FOLLOW_TRIES)
   })()
 }
@@ -263,11 +296,9 @@ function follow($: EngineInterface, text: string, tries: number) {
     void (async () => {
       const path = await transcriptPath($)
       if (path !== undefined) await reload($, path)
-      const before = pending.get(text.trim()) ?? 0
-      if ((before >= 0 && countOf(text) > before) || tries <= 1) {
-        pending.delete(text.trim())
-        $.ui.invalidate('ui.render')
-      } else follow($, text, tries - 1)
+      if (!pending.has(text.trim())) return
+      if (settled(text)) $.ui.invalidate('ui.render')
+      else if (tries > 1) follow($, text, tries - 1)
     })(),
   )
 }
@@ -344,7 +375,9 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     $.clock.every(POLL_MS, () => check($))
-    const envLang = (await $.env.get('LC_ALL')) ?? (await $.env.get('LANG'))
+    // An empty LC_ALL means unset to the C library, so it must not hide LANG
+    const lcAll = await $.env.get('LC_ALL')
+    const envLang = lcAll !== undefined && lcAll !== '' ? lcAll : await $.env.get('LANG')
     ui = stringsFor(pickLocale({ option: options.language, claudeLanguage: await settingsLanguage($), envLang }))
     $.ui.invalidate('ui.render')
     return next(e)

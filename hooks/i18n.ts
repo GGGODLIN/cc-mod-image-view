@@ -31,8 +31,8 @@ const STRINGS: Record<Locale, Strings> = {
 
 export const stringsFor = (locale: Locale): Strings => STRINGS[locale]
 
-const CHINESE = /中文|漢語|汉语|華語|华语|國語|国语|chinese|mandarin|^zh\b/i
-const ENGLISH = /英文|英語|english|^en\b/i
+const CHINESE = /中文|漢語|汉语|華語|华语|國語|国语|chinese|mandarin|^zh(?:[-_.\s]|$)/i
+const ENGLISH = /英文|英語|english|^en(?:[-_.\s]|$)/i
 
 /**
  * The UI language: the mod's own setting when it names one, then Claude Code's free-text

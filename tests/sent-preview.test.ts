@@ -32,7 +32,9 @@ const row = (text: string, surface: 'terminal' | 'desktop' = 'terminal') =>
 
 // A machine with the paste cache, a transcript the grep returns `rows()` for, and a sips that
 // writes its output; `ran` records every external command.
-function machine(on: On, rows: () => string, cache: string[]) {
+type Faults = { truncated?: () => boolean; privateDirOk?: boolean }
+
+function machine(on: On, rows: () => string, cache: string[], faults: Faults = {}) {
   const ran: string[][] = []
   const made = new Set<string>()
   const entry = { size: 0, mtimeMs: 0, isLink: false }
@@ -56,8 +58,11 @@ function machine(on: On, rows: () => string, cache: string[]) {
       made.delete(String(argv[2]))
       made.add(String(argv[3]))
     }
-    const stdout = argv[0] === 'sh' && String(argv[2]).includes('grep') ? rows() : ''
-    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const isGrep = argv[0] === 'sh' && String(argv[2]).includes('grep')
+    const isPrivateDir = argv[0] === 'sh' && String(argv[2]).includes('chmod 700')
+    const exitCode = isPrivateDir && faults.privateDirOk === false ? 1 : 0
+    const isStdoutTruncated = isGrep && (faults.truncated?.() ?? false)
+    return { value: { exitCode, stdout: isGrep ? rows() : '', stderr: '', isStdoutTruncated, isStderrTruncated: false } }
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['engine row'] }))
@@ -156,4 +161,74 @@ test('without any language hint the buttons are English', async ($, on) => {
   expect((await en.find({ type: 'Button', key: 'cc-image-view:open:2' }))?.props.label).toBe('img #2')
   expect((await en.find({ type: 'Button', key: 'cc-image-view:zoom:2' }))?.props.label).toBe('⤢ Zoom')
   await en.unmount()
+})
+
+test('an unconfirmed prompt keeps no buttons after the quick retries run out, and lands later', async ($, on) => {
+  const clock = mock.clock(on)
+  let rows = REAL_ROW
+  machine(on, () => rows, ['2.png', '3.png'])
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  // Load the index so the typed copy's baseline comes from it
+  await (await $.ui.mount(row(REAL))).unmount()
+  await $.prompt.submit({ text: REAL, origin: { kind: 'composer' }, wait: false })
+  for (let i = 0; i < 25; i++) await clock.advance(300)
+
+  const stuck = await $.ui.mount(row(REAL))
+  expect(await stuck.find({ type: 'Button' })).toBeUndefined()
+  await stuck.unmount()
+
+  // The copy's line finally lands: the words are now ambiguous, so still nothing
+  rows = [REAL_ROW, user('u3', REAL)].join('\n')
+  const landed = await $.ui.mount(row(REAL))
+  expect(await landed.find({ type: 'Button' })).toBeUndefined()
+  await landed.unmount()
+})
+
+test('a real prompt whose line lands after the retries still gets its buttons', async ($, on) => {
+  const clock = mock.clock(on)
+  let rows = ''
+  machine(on, () => rows, ['2.png', '3.png'])
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.prompt.submit({ text: REAL, attachments: [{ type: 'image' }, { type: 'image' }], origin: { kind: 'composer' }, wait: false })
+  for (let i = 0; i < 25; i++) await clock.advance(300)
+  rows = REAL_ROW
+  const late = await $.ui.mount(row(REAL))
+  expect(await late.find({ type: 'Button', key: 'cc-image-view:open:2' })).toBeDefined()
+  await late.unmount()
+})
+
+test('a read that comes back cut short voids the old index', async ($, on) => {
+  let rows = REAL_ROW
+  let cut = false
+  machine(on, () => rows, ['2.png', '3.png'], { truncated: () => cut })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const before = await $.ui.mount(row(REAL))
+  expect(await before.find({ type: 'Button', key: 'cc-image-view:open:2' })).toBeDefined()
+  await before.unmount()
+
+  rows = [REAL_ROW, user('u3', REAL)].join('\n')
+  cut = true
+  const after = await $.ui.mount(row(REAL))
+  expect(await after.find({ type: 'Button' })).toBeUndefined()
+  await after.unmount()
+})
+
+test('a read failure inside the pipeline counts as a failed read', async ($, on) => {
+  let rows = REAL_ROW
+  machine(on, () => rows, ['2.png', '3.png'])
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  rows = `${REAL_ROW}\n__CC_IMAGE_VIEW_READ_FAILED__`
+  const failed = await $.ui.mount(row(REAL))
+  expect(await failed.find({ type: 'Button' })).toBeUndefined()
+  await failed.unmount()
+})
+
+test('when the private folder fails its check, nothing is written and pictures that need it are skipped', async ($, on) => {
+  const ran = machine(on, () => REAL_ROW, ['2.png', '3.jpg'], { privateDirOk: false })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const rowView = await $.ui.mount(row(REAL))
+  expect(await rowView.find({ type: 'Button', key: 'cc-image-view:open:2' })).toBeDefined()
+  expect(await rowView.find({ type: 'Button', key: 'cc-image-view:open:3' })).toBeUndefined()
+  expect(ran.some(argv => argv[0] === 'sips')).toBe(false)
+  await rowView.unmount()
 })
