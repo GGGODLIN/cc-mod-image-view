@@ -1,7 +1,7 @@
 {
   "name": "cc-image-view",
   "description": "See the images you paste into Claude Code: thumbnails above the prompt instead of bare [Image #1] tags",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "author": {
     "name": "gggodlin",
     "url": "https://github.com/GGGODLIN"
@@ -9,6 +9,27 @@
   "homepage": "https://github.com/GGGODLIN/cc-mod-image-view",
   "repository": "https://github.com/GGGODLIN/cc-mod-image-view",
   "license": "MIT",
-  "keywords": ["images", "paste", "preview", "thumbnails", "mod", "terminal", "claude-code"],
-  "types": "./types/index.d.ts"
+  "keywords": [
+    "images",
+    "paste",
+    "preview",
+    "thumbnails",
+    "mod",
+    "terminal",
+    "claude-code"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "UI language. auto follows Claude Code's language setting, then LC_ALL / LANG, else English.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "en",
+        "zh-TW"
+      ]
+    }
+  }
 }

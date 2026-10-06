@@ -4,6 +4,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { PastedImage } from '../types'
 import { buttonOffsets, fitBox, fitCells, fitRow, imageNumbers, pngSize } from './layout'
 import type { Size } from './layout'
+import { pickLocale, stringsFor } from './i18n'
+import type { Strings } from './i18n'
 import { imageBlock, messageFor, sentMessages } from './sent'
 import type { SentMessage } from './sent'
 
@@ -321,10 +323,20 @@ async function check($: EngineInterface) {
 // One hover group per image: its button and its card light together, so the pointer can travel
 // from one to the other. Image numbers are unique within a session.
 const scopeOf = (n: number) => `cc-image-view-${n}`
-// CJK, not an emoji: a CJK glyph is two cells on every terminal, so the card offsets add up
-const buttonLabel = (n: number) => `圖 #${n}`
+// English until session.start has read the language settings
+let ui: Strings = stringsFor('en')
 
-export const register: Register = on => {
+async function settingsLanguage($: EngineInterface): Promise<unknown> {
+  const home = await $.env.get('HOME')
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  try {
+    return (JSON.parse(await $.fs.read(`${config}/settings.json`)) as { language?: unknown }).language
+  } catch {
+    return undefined
+  }
+}
+
+export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     if (imageNumbers(e.text).length > 0) watchSend($, e.text)
     return next(e)
@@ -332,6 +344,9 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     $.clock.every(POLL_MS, () => check($))
+    const envLang = (await $.env.get('LC_ALL')) ?? (await $.env.get('LANG'))
+    ui = stringsFor(pickLocale({ option: options.language, claudeLanguage: await settingsLanguage($), envLang }))
+    $.ui.invalidate('ui.render')
     return next(e)
   })
 
@@ -353,7 +368,7 @@ export const register: Register = on => {
               <Box flexDirection="column" alignItems="center" borderStyle="round" borderDimColor>
                 {image.path === null ? (
                   <Box width={columns} height={rows} alignItems="center" justifyContent="center">
-                    <Text dimColor wrap="truncate">no preview</Text>
+                    <Text dimColor wrap="truncate">{ui.noPreview}</Text>
                   </Box>
                 ) : (
                   <Image
@@ -388,11 +403,11 @@ export const register: Register = on => {
     const { Box, Button, Image } = $.ui.resolve(e)
     const zoom = (shown: Shown) => {
       zoomed = shown
-      void $.ui.open({ id: PANE, title: `Image #${shown.n}`, focus: true, closeOnEscape: true })
+      void $.ui.open({ id: PANE, title: ui.paneTitle(shown.n), focus: true, closeOnEscape: true })
       $.ui.invalidate('ui.render')
     }
     const row = await next(e)
-    const offsets = buttonOffsets(list.map(shown => buttonLabel(shown.n)))
+    const offsets = buttonOffsets(list.map(shown => ui.sentButton(shown.n)))
 
     return (
       <Box flexDirection="column">
@@ -400,7 +415,7 @@ export const register: Register = on => {
         <Box flexDirection="row" columnGap={1}>
           {list.map(shown => (
             <Box hover={{ scope: scopeOf(shown.n) }}>
-              <Button key={`cc-image-view:open:${shown.n}`} label={buttonLabel(shown.n)} dimColor onPress={() => zoom(shown)} />
+              <Button key={`cc-image-view:open:${shown.n}`} label={ui.sentButton(shown.n)} dimColor onPress={() => zoom(shown)} />
             </Box>
           ))}
         </Box>
@@ -413,7 +428,7 @@ export const register: Register = on => {
             <Box display="none" hover={{ scope: scopeOf(shown.n), display: 'flex' }} marginLeft={offsets[i]} flexDirection="column" alignItems="flex-start">
               <Box flexDirection="column" alignItems="center" borderStyle="round" borderDimColor>
                 <Image key={`sent-${shown.n}`} source={{ file: shown.path, format: 'png' }} columns={cells.columns} rows={cells.rows} alt={`[Image #${shown.n}]`} />
-                <Button key={`cc-image-view:zoom:${shown.n}`} label="⤢ 放大" dimColor onPress={() => zoom(shown)} />
+                <Button key={`cc-image-view:zoom:${shown.n}`} label={ui.zoom} dimColor onPress={() => zoom(shown)} />
               </Box>
             </Box>
           )
@@ -425,13 +440,13 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
     const { Box, Image, Text } = $.ui.resolve(e)
-    if (zoomed === undefined) return <Text dimColor>沒有選取的圖片</Text>
+    if (zoomed === undefined) return <Text dimColor>{ui.noSelection}</Text>
     // One row for the caption under the picture
     const cells = fitBox(zoomed.size, e.props.bodyColumns, e.props.scroll.bodyRows - 1)
     return (
       <Box flexDirection="column" alignItems="center">
         <Image key="zoom" source={{ file: zoomed.path, format: 'png' }} columns={cells.columns} rows={cells.rows} alt={`[Image #${zoomed.n}]`} />
-        <Text dimColor>{`#${zoomed.n} · Esc 關閉`}</Text>
+        <Text dimColor>{ui.closeHint(zoomed.n)}</Text>
       </Box>
     )
   })

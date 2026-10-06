@@ -137,3 +137,23 @@ test('a typed copy of a real prompt, just sent, never borrows its images', async
   expect(await after.find({ type: 'Button' })).toBeUndefined()
   await after.unmount()
 })
+
+test('buttons speak the chosen language', { options: { language: 'zh-TW' } }, async ($, on) => {
+  machine(on, () => REAL_ROW, ['2.png', '3.png'])
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const zh = await $.ui.mount(row(REAL))
+  const open = await zh.find({ type: 'Button', key: 'cc-image-view:open:2' })
+  const zoom = await zh.find({ type: 'Button', key: 'cc-image-view:zoom:2' })
+  expect(open?.props.label).toBe('圖 #2')
+  expect(zoom?.props.label).toBe('⤢ 放大')
+  await zh.unmount()
+})
+
+test('without any language hint the buttons are English', async ($, on) => {
+  machine(on, () => REAL_ROW, ['2.png', '3.png'])
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const en = await $.ui.mount(row(REAL))
+  expect((await en.find({ type: 'Button', key: 'cc-image-view:open:2' }))?.props.label).toBe('img #2')
+  expect((await en.find({ type: 'Button', key: 'cc-image-view:zoom:2' }))?.props.label).toBe('⤢ Zoom')
+  await en.unmount()
+})
