@@ -12,13 +12,13 @@ The demo is an HTML reconstruction, not a screen recording: the side pane is dra
 ### Which tags count
 
 - **Above the prompt** only looks at the tag and the paste cache, so a typed tag whose number is still cached shows that old picture.
-- **Under sent prompts** shows only pictures the transcript ties to that prompt: Claude Code stores each prompt's paste numbers in `imagePasteIds`, one per image block. A typed `[Image #1]` has no such record and never shows a picture; in a prompt that mixes a typed old tag with a new paste, only the paste shows. When two prompts read exactly the same but carry different images (say the same line typed again later), the row can't tell them apart and neither shows buttons. A prompt just sent shows its buttons once its transcript line is written, usually within a second. A prompt with a missing picture gets no button for it.
+- **Under sent prompts** shows only pictures the transcript ties to that prompt: Claude Code stores each prompt's paste numbers in `imagePasteIds`, one per image block. A typed `[Image #1]` has no such record and never shows a picture; in a prompt that mixes a typed old tag with a new paste, only the paste shows. When two prompts read exactly the same but carry different images (say the same line typed again later), the row can't tell them apart and neither shows buttons. A prompt just sent shows its buttons once its transcript line is written, usually within a second; until the transcript confirms it, it shows none, however long that takes. If the transcript can't be read in full (a read error, or more than 4 MiB of matching rows), no sent prompt shows buttons until a read succeeds. A prompt with a missing picture gets no button for it.
 
 ### Formats and files
 
 Claude Code's image element draws PNG only, so JPG, GIF and WebP are converted to PNG once, first frame only; other extensions are not converted. Converters are tried in order: `sips` (built into macOS), `ffmpeg` (file input only), `magick`, `convert` (256 MiB memory, 1 GiB disk), 10 seconds each; if none works the picture is not shown, and a failed source is not retried. These are programs on your machine and decode the file their own way, so they are part of what you trust when you install this mod. Only `sips` on macOS has been tested.
 
-Converted PNGs and rescued pictures go to `<temp dir>/cc-image-view/<session id>/`. That folder and its parent are checked to be yours and not symlinks, and set to mode 700, before anything is written; if that can't be confirmed nothing is written. Files are written under a temporary name and renamed into place. The mod does not delete them; the system's temp cleanup does.
+Converted PNGs and rescued pictures go to `<temp dir>/cc-image-view/<session id>/`. Before every write the temp dir itself must be yours, not a symlink, writable by no one else, and inside a folder others can't rename things in (closed to them, or sticky like `/tmp`); the two folders under it are then made yours and mode 700. If any of that fails nothing is written, so on a shared `CLAUDE_CODE_TMPDIR` JPG, GIF and WebP previews and rescues are simply off. Files are written under a temporary name and renamed into place. The mod does not delete them; the system's temp cleanup does.
 
 When the paste cache is gone (a reboot cleared the temp dir), pictures of sent prompts are rescued from the transcript. Limit: the rescue reads that prompt's whole transcript line, base64 of every picture included, so a prompt over 4 MiB can't be rescued and its pictures don't show.
 
@@ -83,11 +83,11 @@ Claude Code mod，讓貼進 Claude Code 的圖片看得到，有兩個地方：
 
 session 一開始就每 200ms 讀一次輸入框。沒有貼圖時這個 timer 仍會跑，只是不畫 UI。貼圖不會送出 `prompt.edit`，所以不能改成等編輯事件。
 
-已送出訊息的預覽只顯示對話紀錄檔明確綁在那則訊息上的圖：Claude Code 會把每則訊息附的圖片編號記在 `imagePasteIds`，一個編號對一個圖片區塊。手打的 `[Image #1]` 沒有這筆紀錄，不會被當成圖；同一則混了手打舊標記和新貼的圖，只有新貼的會出現。兩則訊息文字一模一樣、附的圖卻不同時（例如之後又手打了同一句），畫面上分不出是哪一則，兩則都不顯示。剛送出的訊息要等它寫進紀錄檔（通常一秒內），按鈕才出現。缺圖的訊息不顯示按鈕，不會出現「無法預覽」。
+已送出訊息的預覽只顯示對話紀錄檔明確綁在那則訊息上的圖：Claude Code 會把每則訊息附的圖片編號記在 `imagePasteIds`，一個編號對一個圖片區塊。手打的 `[Image #1]` 沒有這筆紀錄，不會被當成圖；同一則混了手打舊標記和新貼的圖，只有新貼的會出現。兩則訊息文字一模一樣、附的圖卻不同時（例如之後又手打了同一句），畫面上分不出是哪一則，兩則都不顯示。剛送出的訊息要等它寫進紀錄檔（通常一秒內），按鈕才出現；紀錄檔還沒確認前一律不顯示，等多久都一樣。紀錄檔讀取失敗或結果被截斷（符合的列超過 4 MiB）時，所有已送出訊息都先不顯示按鈕，直到下一次讀取成功。缺圖的訊息不顯示按鈕，不會出現「無法預覽」。
 
 JPG、GIF、WebP：Claude Code 的圖片元件只畫 PNG，所以這三種格式會先轉成 PNG（只取第一格），其他副檔名一律不轉。轉檔依序試 `sips`（macOS 內建）、`ffmpeg`（只准讀本機檔案）、`magick`、`convert`（限制記憶體 256 MiB、磁碟 1 GiB），每個工具最多 10 秒；都不行就不顯示，失敗過的檔案不再重試。這些工具是你機器上的程式，它們怎麼解碼由它們自己決定，也算在這個 mod 的信任範圍裡；只在 macOS 的 `sips` 上實測過。
 
-轉好的 PNG 與救回的圖放在 `<暫存目錄>/cc-image-view/<session id>/`。這個資料夾和上一層都會先確認是你自己擁有、不是符號連結，並設成只有你能讀（700）；確認不了就不寫。檔案先寫成暫存名稱再改名，讀的人不會讀到寫一半的檔。這個 mod 不會主動清掉這些檔，靠系統清暫存目錄。
+轉好的 PNG 與救回的圖放在 `<暫存目錄>/cc-image-view/<session id>/`。每次寫入前都會確認：暫存目錄本身是你的、不是符號連結、別人不能寫，而且它所在的資料夾別人不能在裡面改名（別人不能寫，或像 `/tmp` 一樣有 sticky 位元）；底下兩層資料夾再設成只有你能讀（700）。任何一項不成立就不寫，所以把 `CLAUDE_CODE_TMPDIR` 設在共用位置時，JPG／GIF／WebP 預覽與救回圖會直接關閉。檔案先寫成暫存名稱再改名，讀的人不會讀到寫一半的檔。這個 mod 不會主動清掉這些檔，靠系統清暫存目錄。
 
 暫存檔不見時（例如重開機清掉了暫存目錄），已送出訊息的圖改從對話紀錄檔取出再畫。限制：救回時要把那一則訊息的整行紀錄讀進來，含所有圖片的 base64，超過 4 MiB 的訊息救不回來，那幾張圖不顯示。
 
