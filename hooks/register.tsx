@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { PastedImage } from '../types'
 import { buttonOffsets, fitBox, fitCells, fitRow, imageNumbers, pngSize } from './layout'
 import type { Size } from './layout'
-import { imageBlock, messageFor, pairImages, sentMessages } from './sent'
+import { imageBlock, messageFor, sentMessages } from './sent'
 import type { SentMessage } from './sent'
 
 // Pasting an image raises no prompt.edit (the tag only shows up on the next keystroke),
@@ -50,34 +50,67 @@ async function cachedFile($: EngineInterface, dir: string | undefined, n: number
   return hit === undefined ? null : `${dir}/${hit.name}`
 }
 
-// Image draws only PNG (or raw pixels), so anything else is converted once with whatever tool
-// the machine has: sips ships with macOS, the others are common on Linux.
+// Image draws only PNG (or raw pixels), so the formats Claude Code accepts as pastes are converted
+// once with whatever tool the machine has: sips ships with macOS, the others are common on Linux.
+// Only these extensions, only the first frame, and file input only: a converter is a trust boundary.
+const CONVERTIBLE = /\.(jpe?g|gif|webp)$/i
 const CONVERTERS = (src: string, out: string): string[][] => [
   ['sips', '-s', 'format', 'png', src, '--out', out],
-  ['ffmpeg', '-loglevel', 'error', '-y', '-i', src, out],
-  ['magick', src, out],
-  ['convert', src, out],
+  ['ffmpeg', '-loglevel', 'error', '-y', '-protocol_whitelist', 'file', '-i', src, '-frames:v', '1', out],
+  ['magick', '-limit', 'memory', '256MiB', '-limit', 'disk', '1GiB', `${src}[0]`, out],
+  ['convert', '-limit', 'memory', '256MiB', '-limit', 'disk', '1GiB', `${src}[0]`, out],
 ]
 
-async function scratch($: EngineInterface, name: string): Promise<string> {
-  const dir = `${await root($)}/cc-image-view/${await $.session.id()}`
-  await $.process.run(['mkdir', '-p', dir])
+// The copies here are someone's pictures: the folder must be this user's own, mode 700, and no
+// symlink, even when CLAUDE_CODE_TMPDIR points somewhere shared.
+const PRIVATE_DIRS = 'umask 077; for d in "$1" "$2"; do mkdir -p "$d" && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" || exit 1; done'
+let privateDir: string | undefined
+
+async function scratch($: EngineInterface, name: string): Promise<string | null> {
+  const base = `${await root($)}/cc-image-view`
+  const dir = `${base}/${await $.session.id()}`
+  if (privateDir !== dir) {
+    const run = await $.process.run(['sh', '-c', PRIVATE_DIRS, 'sh', base, dir], { timeoutMs: 5_000 }).catch(() => null)
+    if (run?.exitCode !== 0) return null
+    privateDir = dir
+  }
   return `${dir}/${name}`
 }
 
-/** A PNG path for `src`: itself when it already is one, else a converted copy; null when no tool could. */
+// One job per output, so two renders asking for the same picture never write it at once
+const jobs = new Map<string, Promise<string | null>>()
+
+function once(out: string, make: () => Promise<string | null>): Promise<string | null> {
+  const running = jobs.get(out)
+  if (running !== undefined) return running
+  const job = make().finally(() => jobs.delete(out))
+  jobs.set(out, job)
+  return job
+}
+
+// Written under a temporary name and renamed into place, so a reader never sees half a file
+async function publish($: EngineInterface, temp: string, out: string): Promise<string | null> {
+  const run = await $.process.run(['mv', '-f', temp, out], { timeoutMs: 5_000 }).catch(() => null)
+  return run?.exitCode === 0 ? out : null
+}
+
+/** A PNG path for `src`: itself when it already is one, else a converted copy; null when none could be made. */
 async function asPng($: EngineInterface, src: string, n: number): Promise<string | null> {
   if (src.toLowerCase().endsWith('.png')) return src
   // The draft is polled every 200 ms; without this a machine with no converter respawns four tools each time
-  if (unconvertible.has(src)) return null
+  if (!CONVERTIBLE.test(src) || unconvertible.has(src)) return null
   const out = await scratch($, `${n}.png`)
-  if (await $.fs.exists(out)) return out
-  for (const argv of CONVERTERS(src, out)) {
-    const ok = await $.process.run(argv, { timeoutMs: 10_000 }).then(run => run.exitCode === 0, () => false)
-    if (ok && (await $.fs.exists(out))) return out
-  }
-  unconvertible.add(src)
-  return null
+  if (out === null) return null
+  return once(out, async () => {
+    if (await $.fs.exists(out)) return out
+    const temp = `${out}.part.png`
+    for (const argv of CONVERTERS(src, temp)) {
+      const ok = await $.process.run(argv, { timeoutMs: 10_000 }).then(run => run.exitCode === 0, () => false)
+      if (ok && (await $.fs.exists(temp))) return publish($, temp, out)
+    }
+    unconvertible.add(src)
+    return null
+  })
 }
 
 const unconvertible = new Set<string>()
@@ -85,9 +118,15 @@ const unconvertible = new Set<string>()
 /** Writes base64 bytes from the transcript to a scratch file, for a paste whose cache is gone. */
 async function writeBytes($: EngineInterface, base64: string, name: string): Promise<string | null> {
   const out = await scratch($, name)
-  if (await $.fs.exists(out)) return out
-  const run = await $.process.run(['sh', '-c', 'base64 -d > "$1"', 'sh', out], { stdin: base64, timeoutMs: 10_000 }).catch(() => null)
-  return run?.exitCode === 0 && (await $.fs.exists(out)) ? out : null
+  if (out === null) return null
+  return once(out, async () => {
+    if (await $.fs.exists(out)) return out
+    const temp = `${out}.part`
+    const run = await $.process
+      .run(['sh', '-c', 'umask 077; base64 -d > "$1"', 'sh', temp], { stdin: base64, timeoutMs: 10_000 })
+      .catch(() => null)
+    return run?.exitCode === 0 && (await $.fs.exists(temp)) ? publish($, temp, out) : null
+  })
 }
 
 const projectFolder = (dir: string) => dir.replace(/[^a-zA-Z0-9]/g, '-')
@@ -116,13 +155,14 @@ async function transcriptPath($: EngineInterface): Promise<string | undefined> {
   return undefined
 }
 
-// A transcript can run to hundreds of MB, past $.fs.read's 4 MiB, so grep picks the user rows
-// that carry an image and sed drops the base64 before the text crosses into the mod.
-const IMAGE_ROWS = `grep -F '"type":"image"' "$1" | grep -F '"type":"user"' | sed -E 's/"data":"[^"]*"/"data":""/g'`
+// A transcript can run to hundreds of MB, past $.fs.read's 4 MiB, so grep scans it on disk and
+// passes on only the person's rows that mention an image tag, with every base64 blob removed.
+const TAGGED_ROWS = `grep -F '[Image #' "$1" | grep -F '"type":"user"' | sed -E 's/"data":"[^"]*"/"data":""/g'`
 
-async function imageRows($: EngineInterface, path: string): Promise<string> {
-  const run = await $.process.run(['sh', '-c', IMAGE_ROWS, 'sh', path], { timeoutMs: 10_000 }).catch(() => null)
-  return run?.stdout ?? ''
+/** Those rows, or null when the read failed or came back cut short: a partial index is not one. */
+async function taggedRows($: EngineInterface, path: string): Promise<string | null> {
+  const run = await $.process.run(['sh', '-c', TAGGED_ROWS, 'sh', path], { timeoutMs: 10_000 }).catch(() => null)
+  return run === null || run.isStdoutTruncated || run.exitCode !== 0 ? null : run.stdout
 }
 
 /** The one full transcript line of a prompt, base64 included; empty when it is over the 4 MiB output cap. */
@@ -163,29 +203,30 @@ async function describe($: EngineInterface, dir: string | undefined, n: number):
   return path === null || size === undefined ? { n, path: null, size: null } : { n, path, size }
 }
 
-// Sent prompts: a tag in a transcript row only counts when the transcript shows an image
-// block behind it, so a typed "[Image #1]" never borrows an earlier paste.
+// Sent prompts: an image is shown only when the transcript ties it to the prompt (imagePasteIds),
+// so a typed "[Image #1]" never borrows an earlier paste.
 const PANE = 'cc-image-view'
 type Shown = { n: number; path: string; size: Size | null }
 let sent: { path: string; size: number; messages: SentMessage[] } | undefined
 let loading: Promise<void> | undefined
-const resolved = new Map<string, Shown | null>()
-// What prompt.submit saw, so a prompt shows its images before the transcript has it on disk
-const submitted: SentMessage[] = []
+// A picture found stays found; one that could not be had is retried only once the transcript grew
+const resolved = new Map<string, Shown | { missingAt: number }>()
 let zoomed: Shown | undefined
 
 async function reload($: EngineInterface, path: string) {
   const size = await fileSize($, path)
   // Unchanged since the last read: a row still missing is a typed tag, not a late write
   if (sent?.path === path && sent.size === size) return
-  sent = { path, size, messages: sentMessages(await imageRows($, path)) }
+  const rows = await taggedRows($, path)
+  if (rows !== null) sent = { path, size, messages: sentMessages(rows) }
 }
 
 async function sentPrompt($: EngineInterface, text: string): Promise<SentMessage | undefined> {
+  if (pending.has(text.trim())) return undefined
   const path = await transcriptPath($)
   if (path === undefined) return undefined
-  const hit = sent?.path === path ? messageFor(sent.messages, text) : undefined
-  if (hit !== undefined) return hit
+  // Re-read whenever the transcript grew, even for a prompt already found: a typed copy sent
+  // later makes the same words ambiguous, and the answer must change with it
   loading ??= reload($, path).finally(() => {
     loading = undefined
   })
@@ -193,11 +234,50 @@ async function sentPrompt($: EngineInterface, text: string): Promise<SentMessage
   return sent === undefined ? undefined : messageFor(sent.messages, text)
 }
 
+// A prompt's row is drawn before its transcript line is written and is not drawn again on its own.
+// Until that line lands the row could only borrow an earlier prompt with the same words, so every
+// sent prompt with a tag waits as pending, the transcript is read until its line shows up, and then
+// rows redraw.
+const FOLLOW_MS = 300
+const FOLLOW_TRIES = 20
+const pending = new Map<string, number>()
+const countOf = (text: string) => sent?.messages.filter(message => message.text.trim() === text.trim()).length ?? 0
+
+// Marked at once, measured in the background: a send never waits on a grep of a large transcript.
+// If the line lands before the baseline is read, the wait ends when the tries run out instead.
+function watchSend($: EngineInterface, text: string) {
+  const key = text.trim()
+  pending.set(key, -1)
+  void (async () => {
+    const path = await transcriptPath($)
+    if (path !== undefined) await reload($, path)
+    if (pending.get(key) === -1) pending.set(key, countOf(text))
+    follow($, text, FOLLOW_TRIES)
+  })()
+}
+
+function follow($: EngineInterface, text: string, tries: number) {
+  $.clock.after(FOLLOW_MS, () =>
+    void (async () => {
+      const path = await transcriptPath($)
+      if (path !== undefined) await reload($, path)
+      const before = pending.get(text.trim()) ?? 0
+      if ((before >= 0 && countOf(text) > before) || tries <= 1) {
+        pending.delete(text.trim())
+        $.ui.invalidate('ui.render')
+      } else follow($, text, tries - 1)
+    })(),
+  )
+}
+
 const EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }
 
-async function sentImage($: EngineInterface, message: SentMessage, n: number, index: number): Promise<Shown | null> {
-  const key = `${await $.session.id()}:${n}`
-  if (resolved.has(key)) return resolved.get(key) ?? null
+async function sentImage($: EngineInterface, message: SentMessage, index: number): Promise<Shown | null> {
+  const n = message.ids[index] ?? 0
+  const key = `${message.uuid}:${index}`
+  const known = resolved.get(key)
+  if (known !== undefined && 'path' in known && (await $.fs.exists(known.path))) return known
+  if (known !== undefined && 'missingAt' in known && known.missingAt === sent?.size) return null
   const cached = await cachedFile($, await imagesDir($), n)
   let path = cached === null ? null : await asPng($, cached, n)
   if (path === null) {
@@ -208,7 +288,11 @@ async function sentImage($: EngineInterface, message: SentMessage, n: number, in
     path = raw === null ? null : await asPng($, raw, n)
   }
   const size = path === null ? undefined : await sizeOf($, path)
-  const shown = path === null || size === undefined ? null : { n, path, size }
+  if (path === null || size === undefined) {
+    resolved.set(key, { missingAt: sent?.size ?? -1 })
+    return null
+  }
+  const shown = { n, path, size }
   resolved.set(key, shown)
   return shown
 }
@@ -242,11 +326,7 @@ const buttonLabel = (n: number) => `圖 #${n}`
 
 export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
-    const kinds = (e.attachments ?? []).filter(item => item.type === 'image').map(item => item.mediaType ?? '')
-    if (kinds.length > 0 && imageNumbers(e.text).length > 0) {
-      submitted.push({ uuid: '', text: e.text, kinds })
-      $.ui.invalidate('ui.render')
-    }
+    if (imageNumbers(e.text).length > 0) watchSend($, e.text)
     return next(e)
   })
 
@@ -296,15 +376,11 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.origin.kind !== 'composer' || imageNumbers(e.props.text).length === 0) return next(e)
-    const message = messageFor(submitted, e.props.text) ?? (await sentPrompt($, e.props.text))
+    const message = await sentPrompt($, e.props.text)
     if (message === undefined) return next(e)
-    const dir = await imagesDir($)
-    const files = dir === undefined ? undefined : await $.fs.list(dir).catch(() => undefined)
-    // No cache folder at all (a reboot cleared it): every tag may be real, the newest still win
-    const isCached = (n: number) => files === undefined || files.some(file => file.name.startsWith(`${n}.`))
     const list: Shown[] = []
-    for (const [index, image] of pairImages(message.text, message.kinds, isCached).entries()) {
-      const shown = await sentImage($, message, image.n, index)
+    for (const index of message.ids.keys()) {
+      const shown = await sentImage($, message, index)
       if (shown !== null) list.push(shown)
     }
     if (list.length === 0) return next(e)

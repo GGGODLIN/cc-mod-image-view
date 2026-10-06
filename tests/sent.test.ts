@@ -1,48 +1,46 @@
 import { expect, test } from 'claude-code/testing'
 
 import { buttonOffsets, cellWidth, fitBox } from '../hooks/layout'
-import { imageBlock, messageFor, pairImages, sentMessages } from '../hooks/sent'
+import { imageBlock, messageFor, sentMessages } from '../hooks/sent'
 
 const image = (mediaType: string, data = '') => ({ type: 'image', source: { type: 'base64', media_type: mediaType, data } })
 const row = (uuid: string, content: unknown, extra: object = {}) => JSON.stringify({ type: 'user', uuid, message: { role: 'user', content }, ...extra })
 
-// Shapes copied from a 2.1.291 transcript: a real paste stores text plus image blocks,
-// a typed tag is a plain string, and the paste's source path follows as its own text row.
+// Shapes copied from a 2.1.291 transcript: a real paste stores text plus image blocks and the
+// paste numbers in imagePasteIds; a typed prompt is one string with no ids.
 const LINES = [
-  row('u1', [{ type: 'text', text: '[Image #1] 只回覆 OK' }, image('image/png')]),
-  row('u1-src', [{ type: 'text', text: '[Image: source: /tmp/a.png]' }]),
-  row('u2', [{ type: 'text', text: '[Image #2] 設計稿，[Image #3] 午餐，[Image #4] JPG' }, image('image/png'), image('image/png'), image('image/jpeg')]),
+  row('u1', [{ type: 'text', text: '[Image #1] 只回覆 OK' }, image('image/png')], { imagePasteIds: [1] }),
+  row('u2', [{ type: 'text', text: '[Image #2] 設計稿，[Image #3] 午餐，[Image #4] JPG' }, image('image/png'), image('image/png'), image('image/jpeg')], { imagePasteIds: [2, 3, 4] }),
   row('u3', '請把 [Image #1] 和 [Image #99] 當成純文字'),
-  row('u4', [{ type: 'tool_result', tool_use_id: 't', content: [image('image/png')] }, { type: 'text', text: '[Image #5]' }]),
-  row('u5', [{ type: 'text', text: '[Image #6]' }, image('image/png')], { isMeta: true }),
+  row('u4', [{ type: 'tool_result', tool_use_id: 't', content: [image('image/png')] }, { type: 'text', text: '[Image #5]' }], { imagePasteIds: [5] }),
+  row('u5', [{ type: 'text', text: '[Image #6]' }, image('image/png')], { isMeta: true, imagePasteIds: [6] }),
+  row('u6', [{ type: 'text', text: '像 [Image #1] 那樣，這張 [Image #7]' }, image('image/jpeg')], { imagePasteIds: [7] }),
+  row('u7', [{ type: 'text', text: '[Image #8] [Image #9]' }, image('image/png')], { imagePasteIds: [8, 9] }),
   '{not json',
 ].join('\n')
 
-test('only prompts with image blocks count, typed tags and tool screenshots do not', () => {
-  expect(sentMessages(LINES)).toEqual([
-    { uuid: 'u1', text: '[Image #1] 只回覆 OK', kinds: ['image/png'] },
-    { uuid: 'u2', text: '[Image #2] 設計稿，[Image #3] 午餐，[Image #4] JPG', kinds: ['image/png', 'image/png', 'image/jpeg'] },
+test('each image is bound by imagePasteIds; typed prompts and tool screenshots carry none', () => {
+  const messages = sentMessages(LINES)
+  expect(messages.map(m => [m.uuid, m.ids, m.kinds])).toEqual([
+    ['u1', [1], ['image/png']],
+    ['u2', [2, 3, 4], ['image/png', 'image/png', 'image/jpeg']],
+    ['u3', [], []],
+    ['u6', [7], ['image/jpeg']],
+    // Ids that don't match the image blocks one to one are not guessed at
+    ['u7', [], []],
   ])
 })
 
-test('images pair with the newest cached tags, in the order they appear', () => {
-  const all = () => true
-  expect(pairImages('[Image #2] a [Image #3] b [Image #4]', ['image/png', 'image/png', 'image/jpeg'], all)).toEqual([
-    { n: 2, mediaType: 'image/png' },
-    { n: 3, mediaType: 'image/png' },
-    { n: 4, mediaType: 'image/jpeg' },
-  ])
-  // A typed old tag before a real paste: the paste got the newer number
-  expect(pairImages('像 [Image #1] 那樣，這張 [Image #5]', ['image/jpeg'], all)).toEqual([{ n: 5, mediaType: 'image/jpeg' }])
-  // A typed tag with no cached paste never takes the image, however high its number
-  expect(pairImages('[Image #5] 和 [Image #99]', ['image/png'], n => n !== 99)).toEqual([{ n: 5, mediaType: 'image/png' }])
-  expect(pairImages('[Image #7] [Image #8]', ['image/png'], all)).toEqual([{ n: 8, mediaType: 'image/png' }])
+test('a typed old tag next to a new paste binds only the paste', () => {
+  expect(messageFor(sentMessages(LINES), '像 [Image #1] 那樣，這張 [Image #7]')?.ids).toEqual([7])
 })
 
-test('a row finds its prompt by text, and typed tags find none', () => {
+test('typed tags find nothing, and a typed copy of a real prompt hides both', () => {
   const messages = sentMessages(LINES)
   expect(messageFor(messages, '[Image #1] 只回覆 OK')?.uuid).toBe('u1')
   expect(messageFor(messages, '請把 [Image #1] 和 [Image #99] 當成純文字')).toBeUndefined()
+  const copied = sentMessages([LINES, row('u8', '[Image #1] 只回覆 OK')].join('\n'))
+  expect(messageFor(copied, '[Image #1] 只回覆 OK')).toBeUndefined()
 })
 
 test('image bytes come from the full line by block index', () => {
