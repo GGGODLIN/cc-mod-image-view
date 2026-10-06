@@ -1,25 +1,23 @@
 # cc-image-view
 
-本機獨立的 Claude Code mod。輸入框裡有 `[Image #n]` 時，在 terminal 的 AbovePrompt 畫一列帶編號的縮圖。沒有這些標記時不畫這列，也不占 UI。
+Claude Code mod。輸入框裡有 `[Image #n]` 時，在 terminal 的 AbovePrompt 畫一列帶編號的縮圖。沒有這些標記時不畫這列，也不占 UI。
 
 貼上後不必再按一個鍵。送出、或把標記刪掉之後，下一次檢查（200ms）縮圖就消失。橫圖、直圖照像素比例縮，不會被拉成同一種格子。快取檔找不到時，那一格顯示 `no preview`，不畫壞掉的圖。只在 terminal 畫；desktop、以及 AbovePrompt 以外的元件，都把畫面交回原來的鏈，不改其他 mod 的介面。
 
 session 一開始就每 200ms 讀一次輸入框。沒有貼圖時這個 timer 仍會跑，只是不畫 UI。貼圖不會送出 `prompt.edit`，所以不能改成等編輯事件。
 
-找得到的快取 PNG 會經 `$.fs.read(path, { as: 'bytes' })` 讀進檔案內容，不是只讀 header。引擎對這次讀取有大小上限；超過就放棄比例，圖仍可畫。`pngSize` 只用讀到內容的前 24 bytes 取寬高。終端機自己開檔畫 `Image`，像素不經過這個 mod。
+這個 mod 會讀到的東西：每 200ms 讀一次整個輸入框的文字；找得到的快取 PNG 會經 `$.fs.read(path, { as: 'bytes' })` 把整個檔案讀進來，用前 24 bytes 算寬高。引擎對這次讀取有大小上限；超過就放棄比例，圖仍可畫。mod 不自己解碼、縮放或重新編碼圖片，畫圖交給終端機開檔處理。
 
-機制借自 [jarrodwatts/claude-image-view](https://github.com/jarrodwatts/claude-image-view/tree/12795b62f1c17f4b36c980e33672fbdff3a6731a) 的 commit `12795b62f1c17f4b36c980e33672fbdff3a6731a`。MIT，Copyright (c) 2026 Jarrod Watts。見 [LICENSE](/LICENSE) 與 [NOTICE](/NOTICE)。這裡的 plugin 名稱是 `cc-image-view`，避免和上游的 `image-view` 撞名。
+由 gggodlin 改寫與維護。機制借自 [jarrodwatts/claude-image-view](https://github.com/jarrodwatts/claude-image-view/tree/12795b62f1c17f4b36c980e33672fbdff3a6731a) 的 commit `12795b62f1c17f4b36c980e33672fbdff3a6731a`。MIT，Copyright (c) 2026 Jarrod Watts。見 [LICENSE](/LICENSE) 與 [NOTICE](/NOTICE)。這裡的 plugin 名稱是 `cc-image-view`，避免和上游的 `image-view` 撞名。
 
-## 常駐安裝
-
-在 repo 根目錄執行一次：
+## 安裝
 
 ```bash
-claude plugin marketplace add .
+claude plugin marketplace add GGGODLIN/cc-mod-image-view
 claude plugin install cc-image-view@cc-mod-image-view --scope user
 ```
 
-之後新開 Claude Code session 會自動載入，不必再帶 `--plugin-dir`。有圖片標記才顯示預覽列。
+之後新開 Claude Code session 會自動載入。有圖片標記才顯示預覽列。從本機 clone 安裝時，把第一行換成在 repo 根目錄執行 `claude plugin marketplace add .`。
 
 在 Herdr 使用時，另把以下條件放進互動 shell 的啟動設定，讓圖片開關只套用在新的 Herdr shell：
 
@@ -51,7 +49,7 @@ claude --plugin-dir .
 CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1 claude --plugin-dir .
 ```
 
-這個環境變數只加在這次啟動，不寫入全域設定。Claude Code 記錄 `kittyGraphics=yes (env: CLAUDE_CODE_FORCE_TERMINAL_IMAGES)`；橫向藍圖、直向橘圖可同時顯示，刪掉其中一個標記只移除對應縮圖，清空輸入後預覽列消失。現有白話／跟丟了入口仍在。
+這個環境變數只加在這次啟動，不寫入全域設定。Claude Code 記錄 `kittyGraphics=yes (env: CLAUDE_CODE_FORCE_TERMINAL_IMAGES)`；橫向藍圖、直向橘圖可同時顯示，刪掉其中一個標記只移除對應縮圖，清空輸入後預覽列消失。
 
 驗證限於本機 Herdr 與 Claude Code 2.1.288；沒有承諾其他終端或新版相容。直接 Ghostty 對照未完成，真送出後清空只保留 mock 證據，實機沒有提交圖片給模型。常駐使用方式見前面的安裝段；這裡保留單一 session 的顯圖驗收範圍。
 
